@@ -25,16 +25,21 @@ def write_draft_board(rows: list[dict], out_dir: Path) -> tuple[Path, Path]:
         "# 2026-27 Draft Board",
         "",
         "Ranked by projected per-game fantasy points in your H2H Points league. "
-        "Position-agnostic (best available for any draft slot).",
+        "Position-agnostic (best available for any draft slot). Projections from "
+        "DARKO; Δ vs 25-26 compares DARKO's projection to last season's raw output "
+        "(mostly negative because DARKO regresses toward the mean — read it as "
+        "*relative* optimism, not absolute change).",
         "",
-        "| Rank | Tier | Player | Age | Proj FP/G | 25-26 FP/G | Growth |",
-        "|-----:|------|--------|----:|----------:|-----------:|-------:|",
+        "| Rank | Tier | Player | Age | Proj FP/G | 25-26 FP/G | Δ vs 25-26 |",
+        "|-----:|------|--------|----:|----------:|-----------:|-----------:|",
     ]
     for r in rows:
         age = "" if r.get("age") is None else f"{r['age']:.0f}"
+        base = "—" if r.get("baseline_fpts_pg") is None else f"{r['baseline_fpts_pg']:.1f}"
+        growth = "—" if r.get("growth") is None else f"{r['growth']:+.1f}"
         lines.append(
             f"| {r['rank']} | {r['tier']} | {r['name']} | {age} | "
-            f"{r['proj_fpts_pg']:.1f} | {r['baseline_fpts_pg']:.1f} | {r['growth']:+.1f} |"
+            f"{r['proj_fpts_pg']:.1f} | {base} | {growth} |"
         )
     md_path.write_text("\n".join(lines) + "\n")
     return csv_path, md_path

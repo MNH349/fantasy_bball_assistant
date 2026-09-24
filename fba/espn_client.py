@@ -11,6 +11,9 @@ from config import Config
 from fba import scoring
 
 
+ESPN_FBA_BASE = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba"
+
+
 def get_league(cfg: Config):
     """Return a connected espn_api basketball League for the configured season."""
     from espn_api.basketball import League  # imported lazily so tests don't need the dep
@@ -21,6 +24,37 @@ def get_league(cfg: Config):
         espn_s2=cfg.espn_s2,
         swid=cfg.swid,
     )
+
+
+def fetch_scoring_formula(cfg: Config) -> dict[str, float]:
+    """Read the league's real per-stat Points formula from ESPN's raw settings.
+
+    The espn_api Settings object doesn't expose per-stat point values, so we hit
+    the mSettings view directly and map ESPN statIds to canonical keys. Falls
+    back to DEFAULT_SCORING on any failure.
+    """
+    import requests
+
+    url = f"{ESPN_FBA_BASE}/seasons/{cfg.season}/segments/0/leagues/{cfg.league_id}"
+    try:
+        resp = requests.get(
+            url,
+            params={"view": "mSettings"},
+            cookies={"espn_s2": cfg.espn_s2, "SWID": cfg.swid},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        items = resp.json()["settings"]["scoringSettings"]["scoringItems"]
+    except (requests.RequestException, KeyError, ValueError) as exc:  # noqa: BLE001
+        print(f"[scoring] could not read league formula ({exc}); using DEFAULT_SCORING.")
+        return dict(scoring.DEFAULT_SCORING)
+
+    formula: dict[str, float] = {}
+    for item in items:
+        key = scoring.ESPN_STAT_ID_TO_KEY.get(item.get("statId"))
+        if key:
+            formula[key] = float(item.get("points", 0.0))
+    return formula or dict(scoring.DEFAULT_SCORING)
 
 
 def player_stat_line(player) -> dict[str, float]:

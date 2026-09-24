@@ -22,7 +22,7 @@ def main() -> None:
     league = espn_client.get_league(cfg)
     print(f"Connected: {getattr(league.settings, 'name', '(unnamed league)')}")
 
-    formula = scoring.scoring_from_league(league)
+    formula = espn_client.fetch_scoring_formula(cfg)
     print("\n=== Scoring formula (per stat) ===")
     print(" ", scoring.format_scoring(formula))
 

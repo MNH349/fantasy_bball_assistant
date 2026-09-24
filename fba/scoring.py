@@ -66,6 +66,8 @@ ESPN_STAT_ID_TO_KEY: dict[int, str] = {
     16: "FTA",
     17: "3PM",
     18: "3PA",
+    38: "TD",  # triple-double bonus (per-game event; not derivable from averages)
+    39: "QD",  # quadruple-double bonus (vanishingly rare)
 }
 
 
