@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily in-season update for the fantasy basketball assistant.
+
+  Runs scripts/daily_update.py every morning at 08:00 (local time), which
+  captures the previous night's box scores and DARKO's daily refresh. Your ESPN
+  cookies stay in .env on this machine; nothing leaves it.
+
+  Install:
+    cp launchd/com.tftaddict.fba-daily.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tftaddict.fba-daily.plist
+  Run once now to test:
+    launchctl start com.tftaddict.fba-daily
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.tftaddict.fba-daily.plist
+
+  Adjust the two absolute paths below if the project or venv moves.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tftaddict.fba-daily</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mikey/fantasy_bball_assistant/venv/bin/python</string>
+        <string>/Users/mikey/fantasy_bball_assistant/scripts/daily_update.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mikey/fantasy_bball_assistant</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mikey/fantasy_bball_assistant/daily_update.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mikey/fantasy_bball_assistant/daily_update.log</string>
+</dict>
+</plist>

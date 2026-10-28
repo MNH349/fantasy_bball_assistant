@@ -8,10 +8,14 @@ drop candidates, and trade targets — short-term (this/next week) and rest-of-s
 
 - ✅ **Phase 1 — Connect & scoring**: read the league, resolve its Points formula.
 - ✅ **Phase 2 — Draft board**: rank players by projected 26-27 fantasy points
-  (2025-26 stats + projected growth). *Time-critical: draft is ~Sept 2026.*
-- 🔜 **Phase 3 — In-season projections** (DARKO ROS/next-game + games-per-week).
-- 🔜 **Phase 4 — Pickups / drops / trade targets** reports.
-- 🔜 **Phase 5 — Web dashboard + weekly scheduled run.**
+  (2025-26 stats + projected growth).
+- ✅ **Phase 3 — In-season valuation**: DARKO talent blended with season-to-date
+  production (K=20 confidence ramp), split into rest-of-season and this-week
+  values (schedule-aware game counts).
+- ✅ **Phase 4 — Daily report**: waiver upgrades (protected drops), streaming,
+  risers/fallers, and a CLI trade evaluator; a daily snapshot builds history.
+- 🔜 **Phase 5 — Web dashboard** over the snapshot history (daily run already live
+  via launchd).
 
 ## Setup
 
@@ -44,27 +48,67 @@ python scripts/diagnostics.py
 # Phase 2 — build the draft cheat sheet -> reports/draft_board.{csv,md}
 python scripts/draft_board.py
 
+# Phase 3/4 — daily in-season update -> reports/inseason_latest.md (+ snapshot)
+python scripts/daily_update.py
+
+# Evaluate a proposed trade against the latest snapshot
+python scripts/evaluate_trade.py \
+    --give "Deni Avdija, Naz Reid, Darryn Peterson" \
+    --get  "Jaden McDaniels, Anthony Black, Bam Adebayo"
+
 # Tests (no credentials needed)
 pytest
 ```
 
 The draft board builds even **without** credentials (it uses a default scoring
 formula and public NBA stats); connecting just swaps in your league's exact
-Points values.
+Points values. The in-season update needs credentials (it reads your rosters).
+
+### Run it daily (macOS launchd)
+
+`scripts/daily_update.py` is meant to run every morning so the snapshot history
+(and the trend/riser columns) fill in. A ready-made agent is in `launchd/`:
+
+```bash
+cp launchd/com.tftaddict.fba-daily.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.tftaddict.fba-daily.plist
+launchctl start com.tftaddict.fba-daily   # run once now to verify
+```
+
+It runs at 08:00 local (captures the prior night's box scores + DARKO's daily
+refresh) and logs to `daily_update.log`. Your cookies never leave the machine.
 
 ## Layout
 
-- `config.py` — loads `.env`.
+- `config.py` — loads `.env`; paths (reports, cache, `history.db`).
 - `fba/scoring.py` — the Points scoring engine (the backbone).
-- `fba/espn_client.py` — league connection + snapshots.
-- `fba/stats_nba.py` — 2025-26 baseline stats (nba_api, cached to `data_cache/`).
-- `fba/projections.py` — growth model + (later) DARKO ingest.
-- `fba/draft.py` — the ranked draft board.
-- `fba/recommend.py`, `fba/report.py` — in-season logic (Phases 3–4).
-- `scripts/` — runnable entry points.
+- `fba/espn_client.py` — league connection, rosters, snapshots, injuries.
+- `fba/stats_nba.py` — nba_api stats + games history + team tricodes (cached).
+- `fba/projections.py` — DARKO talent ingest + age-curve fallback.
+- `fba/draft.py` / `fba/report.py` — the preseason ranked draft board.
+- `fba/inseason.py` — in-season valuation (DARKO × role + production blend).
+- `fba/schedule.py` — NBA schedule → games per period / remaining.
+- `fba/availability.py` — career-based games-played (durability) model.
+- `fba/storage.py` — SQLite daily snapshot store (`data_cache/history.db`).
+- `fba/inseason_report.py` — the daily Markdown report.
+- `scripts/` — runnable entry points (`diagnostics`, `draft_board`,
+  `daily_update`, `evaluate_trade`).
+
+## How in-season value is computed
+
+`value_fpg = (1 − w)·DARKO_fpg + w·actual_fpg`, where `w = games / (games + 20)`.
+DARKO (re-pulled daily) anchors the estimate while the sample is small; actual
+production earns weight as games pile up. DARKO's rates run on each player's role
+(minutes regressed from last season early on, toward season-to-date as it grows),
+so role changes flow through immediately. Two horizons come out: **ROS** (per-game
+× games left = durability × team games remaining) and **Week** (per-game × games
+in the current Mon–Sun period; zeroed for players who are OUT). DARKO's **DPM** is
+shown as a trend signal only — it never drives the fantasy-points value.
 
 ## Data sources & caveats
 
 - **ESPN**: unofficial `espn-api` library (undocumented endpoints — no SLA).
-- **NBA stats**: `nba_api` (official NBA.com data, cached to disk).
-- **Projections**: DARKO (free) once wired; age-curve baseline until then.
+- **NBA stats & schedule**: `nba_api` (official NBA.com data, cached to disk).
+- **Projections**: DARKO talent sheet (free, updates daily).
+- Early-season values lean heavily on DARKO by design — a hot/cold first week is
+  mostly noise, and the blend tightens toward reality as games accumulate.

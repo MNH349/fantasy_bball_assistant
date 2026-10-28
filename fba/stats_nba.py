@@ -55,6 +55,7 @@ def fetch_player_stats(season: str = BASELINE_SEASON, use_cache: bool = True) ->
             {
                 "player_id": int(row["PLAYER_ID"]),
                 "name": row["PLAYER_NAME"],
+                "team": row["TEAM_ABBREVIATION"] if "TEAM_ABBREVIATION" in row else None,
                 "age": float(row["AGE"]) if "AGE" in row else None,
                 "gp": int(row["GP"]) if "GP" in row else 0,
                 "line": line,
@@ -65,6 +66,13 @@ def fetch_player_stats(season: str = BASELINE_SEASON, use_cache: bool = True) ->
     # Be polite to the endpoint if a caller loops over seasons.
     time.sleep(0.6)
     return records
+
+
+def team_tricode_by_id() -> dict[int, str]:
+    """Map NBA team id -> tricode (e.g. 1610612739 -> 'CLE'), from the static list."""
+    from nba_api.stats.static import teams
+
+    return {t["id"]: t["abbreviation"] for t in teams.get_teams()}
 
 
 def games_history(seasons: list[str] = CAREER_SEASONS) -> dict[int, list[int]]:

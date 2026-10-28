@@ -102,6 +102,41 @@ def fetch_espn_player_data(cfg: Config, pool_size: int = 800) -> dict[str, dict]
     return out
 
 
+def fetch_roster_status(cfg: Config, pool_size: int = 800) -> dict:
+    """Who owns whom right now: {by_name: {...}, my_team_name}.
+
+    For each player, `rostered_by` is the fantasy team name (None for a free
+    agent), `is_mine` flags your own roster, and `injury` is ESPN's status.
+    Drives the in-season add/drop logic (what's available, what's yours).
+    """
+    league = get_league(cfg)
+    mine = my_team(league, cfg)
+    my_name = getattr(mine, "team_name", None)
+
+    def injury_of(p):
+        inj = getattr(p, "injuryStatus", None)
+        return inj if isinstance(inj, str) else None  # FA objects return [] here
+
+    def payload(p, rostered_by):
+        return {
+            "rostered_by": rostered_by,
+            "is_mine": rostered_by == my_name,
+            "injury": injury_of(p),
+            "espn_avg": getattr(p, "projected_avg_points", 0.0) or 0.0,
+            "pro_team": getattr(p, "proTeam", None),
+        }
+
+    by_name: dict[str, dict] = {}
+    for team in league.teams:
+        for p in getattr(team, "roster", []) or []:
+            if p.name:
+                by_name[p.name] = payload(p, team.team_name)
+    for p in league.free_agents(size=pool_size):
+        if p.name and p.name not in by_name:
+            by_name[p.name] = payload(p, None)
+    return {"by_name": by_name, "my_team_name": my_name}
+
+
 def fetch_espn_projections(cfg: Config, pool_size: int = 800) -> dict[str, dict]:
     """Map player name -> ESPN's own projection, as a consensus cross-reference.
 

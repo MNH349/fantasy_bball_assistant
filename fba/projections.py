@@ -10,7 +10,8 @@ Phase 2 (draft): project each player's 26-27 per-game stat line.
   - Fallback: if DARKO can't be reached, a 25-26 baseline nudged by an age curve,
     so the draft board still runs.
 
-Phase 3 (in-season): DARKO rest-of-season + next-game projections. Stubbed below.
+In-season valuation (DARKO blended with this season's production) lives in
+fba/inseason.py; this module stays the talent-projection source for both.
 """
 from __future__ import annotations
 
@@ -115,6 +116,8 @@ def load_darko_talent(url: str = DARKO_CSV_URL, timeout: int = 30) -> dict[int, 
             "age": _f(row.get("age")),
             "position": row.get("position", ""),
             "darko_minutes": _f(row.get("minutes")),
+            "tm_id": int(_f(row.get("tm_id", 0))),  # NBA team id (current team)
+            "dpm": _f(row.get("dpm")),               # trend signal, not fantasy value
             "rates": {k: _f(row.get(k)) for k in rate_fields},
         }
     return out
@@ -123,17 +126,3 @@ def load_darko_talent(url: str = DARKO_CSV_URL, timeout: int = 30) -> dict[int, 
 # Back-compat alias used by the draft-board script.
 def load_darko_preseason(url: str = DARKO_CSV_URL) -> dict[int, dict]:
     return load_darko_talent(url)
-
-
-# --- Phase 3: in-season (stubbed) -----------------------------------------
-def rest_of_season_projection(player_record: dict) -> dict[str, float]:
-    raise NotImplementedError(
-        "Phase 3: ingest DARKO rest-of-season projections and blend with recent "
-        "nba_api game logs."
-    )
-
-
-def next_week_projection(player_record: dict, games_next_week: int) -> dict[str, float]:
-    raise NotImplementedError(
-        "Phase 3: DARKO next-game projection x games-per-week from the NBA schedule."
-    )

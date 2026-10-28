@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 REPORTS_DIR = PROJECT_ROOT / "reports"
 DATA_CACHE_DIR = PROJECT_ROOT / "data_cache"
+# Daily in-season snapshots (gitignored with the rest of data_cache/).
+HISTORY_DB = DATA_CACHE_DIR / "history.db"
 
 load_dotenv(PROJECT_ROOT / ".env")
 
