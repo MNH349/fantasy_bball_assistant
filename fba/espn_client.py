@@ -57,6 +57,79 @@ def fetch_scoring_formula(cfg: Config) -> dict[str, float]:
     return formula or dict(scoring.DEFAULT_SCORING)
 
 
+def fetch_current_teams(cfg: Config, pool_size: int = 800) -> dict[str, str]:
+    """Map player name -> current pro team abbreviation for the 26-27 season.
+
+    Combines every fantasy roster with the free-agent pool so it works before
+    or after the draft. ESPN uses ASCII names, which match DARKO's spellings.
+    """
+    league = get_league(cfg)
+    teams: dict[str, str] = {}
+    for team in league.teams:
+        for p in getattr(team, "roster", []) or []:
+            if p.name:
+                teams[p.name] = getattr(p, "proTeam", None)
+    for p in league.free_agents(size=pool_size):
+        if p.name and p.name not in teams:
+            teams[p.name] = getattr(p, "proTeam", None)
+    return teams
+
+
+def fetch_espn_player_data(cfg: Config, pool_size: int = 800) -> dict[str, dict]:
+    """One pass over the league: {name: {team, espn_proj_total, espn_proj_avg, injury}}.
+
+    Combines what `fetch_current_teams` and `fetch_espn_projections` each fetched
+    separately, so the board only builds/reads the league once instead of twice.
+    """
+    league = get_league(cfg)
+    out: dict[str, dict] = {}
+
+    def record(p):
+        if not p.name or p.name in out:
+            return
+        out[p.name] = {
+            "team": getattr(p, "proTeam", None),
+            "espn_proj_total": getattr(p, "projected_total_points", 0.0) or 0.0,
+            "espn_proj_avg": getattr(p, "projected_avg_points", 0.0) or 0.0,
+            "injury": getattr(p, "injuryStatus", None),
+        }
+
+    for team in league.teams:
+        for p in getattr(team, "roster", []) or []:
+            record(p)
+    for p in league.free_agents(size=pool_size):
+        record(p)
+    return out
+
+
+def fetch_espn_projections(cfg: Config, pool_size: int = 800) -> dict[str, dict]:
+    """Map player name -> ESPN's own projection, as a consensus cross-reference.
+
+    Returns {name: {espn_proj_total, espn_proj_avg, injury}} for every rostered
+    and free-agent player. ESPN's projections run optimistic (generous minutes),
+    so they're a sanity check, not a target — big divergences flag value or risk.
+    """
+    league = get_league(cfg)
+    out: dict[str, dict] = {}
+
+    def record(p):
+        if not p.name or p.name in out:
+            return
+        out[p.name] = {
+            "espn_proj_total": getattr(p, "projected_total_points", 0.0) or 0.0,
+            "espn_proj_avg": getattr(p, "projected_avg_points", 0.0) or 0.0,
+            "team": getattr(p, "proTeam", None),
+            "injury": getattr(p, "injuryStatus", None),
+        }
+
+    for team in league.teams:
+        for p in getattr(team, "roster", []) or []:
+            record(p)
+    for p in league.free_agents(size=pool_size):
+        record(p)
+    return out
+
+
 def player_stat_line(player) -> dict[str, float]:
     """Extract a per-game canonical stat line from an espn_api Player.
 

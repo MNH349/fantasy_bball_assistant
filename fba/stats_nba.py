@@ -14,6 +14,9 @@ from config import DATA_CACHE_DIR
 # nba_api season strings are "YYYY-YY". The 2025-26 season is "2025-26".
 BASELINE_SEASON = "2025-26"
 
+# Recent seasons (most recent first) used to judge career durability.
+CAREER_SEASONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"]
+
 # nba_api LeagueDashPlayerStats column -> our canonical key.
 NBA_COL_TO_KEY = {
     "PTS": "PTS", "REB": "REB", "AST": "AST", "STL": "STL", "BLK": "BLK",
@@ -62,3 +65,16 @@ def fetch_player_stats(season: str = BASELINE_SEASON, use_cache: bool = True) ->
     # Be polite to the endpoint if a caller loops over seasons.
     time.sleep(0.6)
     return records
+
+
+def games_history(seasons: list[str] = CAREER_SEASONS) -> dict[int, list[int]]:
+    """Return {player_id: [games_played, ...]} across seasons, most recent first.
+
+    Missing seasons (player not in the league yet) are simply absent, so the
+    list length reflects how much career history exists. Cached per season.
+    """
+    history: dict[int, list[int]] = {}
+    for season in seasons:
+        for rec in fetch_player_stats(season=season):
+            history.setdefault(rec["player_id"], []).append(rec.get("gp", 0))
+    return history

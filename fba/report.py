@@ -15,7 +15,8 @@ def write_draft_board(rows: list[dict], out_dir: Path) -> tuple[Path, Path]:
     csv_path = out_dir / "draft_board.csv"
     md_path = out_dir / "draft_board.md"
 
-    fields = ["rank", "tier", "name", "age", "proj_fpts_pg", "baseline_fpts_pg", "growth"]
+    fields = ["rank", "tier", "cls", "name", "positions", "team", "fpg",
+              "games", "value", "espn_rank", "adp_rank"]
     with csv_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
@@ -24,22 +25,23 @@ def write_draft_board(rows: list[dict], out_dir: Path) -> tuple[Path, Path]:
     lines = [
         "# 2026-27 Draft Board",
         "",
-        "Ranked by projected per-game fantasy points in your H2H Points league. "
-        "Position-agnostic (best available for any draft slot). Projections from "
-        "DARKO; Δ vs 25-26 compares DARKO's projection to last season's raw output "
-        "(mostly negative because DARKO regresses toward the mean — read it as "
-        "*relative* optimism, not absolute change).",
+        "Ranked by projected **season value** (FP/G × games) for your H2H Points "
+        "league. Value blends our DARKO+crowding+availability model with ESPN's "
+        "projection, weighted by data reliability — **V**eterans 0.7 ours, "
+        "**S**ophomores 0.3 ours, **R**ookies ESPN-only (with an ADP downward cap "
+        "and a bust discount). **ESPN Rk** and **ADP** are consensus references; "
+        "big gaps from our rank are where to apply judgment.",
         "",
-        "| Rank | Tier | Player | Age | Proj FP/G | 25-26 FP/G | Δ vs 25-26 |",
-        "|-----:|------|--------|----:|----------:|-----------:|-----------:|",
+        "| Rank | Tier | Cls | Player | Pos | Team | FP/G | G | Value | ESPN Rk | ADP |",
+        "|-----:|------|:---:|--------|-----|------|-----:|--:|------:|--------:|----:|",
     ]
     for r in rows:
-        age = "" if r.get("age") is None else f"{r['age']:.0f}"
-        base = "—" if r.get("baseline_fpts_pg") is None else f"{r['baseline_fpts_pg']:.1f}"
-        growth = "—" if r.get("growth") is None else f"{r['growth']:+.1f}"
+        erk = f"#{r['espn_rank']}" if r.get("espn_rank") else "—"
+        adp = f"#{r['adp_rank']}" if r.get("adp_rank") else "—"
         lines.append(
-            f"| {r['rank']} | {r['tier']} | {r['name']} | {age} | "
-            f"{r['proj_fpts_pg']:.1f} | {base} | {growth} |"
+            f"| {r['rank']} | {r['tier']} | {r['cls']} | {r['name']} | "
+            f"{r.get('positions') or ''} | {r.get('team') or ''} | "
+            f"{r['fpg']:.1f} | {r['games']:.0f} | {r['value']:.0f} | {erk} | {adp} |"
         )
     md_path.write_text("\n".join(lines) + "\n")
     return csv_path, md_path

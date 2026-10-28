@@ -1,18 +1,16 @@
-"""Draft board: rank players by projected 26-27 fantasy points.
+"""Draft board assembly: per-player value, then final ranking.
 
-Position-agnostic best-available board — works for any draft slot. Reuses the
-league's Points scoring formula so the ranking reflects *your* league.
-
-Input is a list of unified projection records (source-agnostic), each with:
-    {"name", "age", "proj_line": {...}, "baseline_line": {...} | None}
-The caller (scripts/draft_board.py) builds these from DARKO or, as a fallback,
-from the age-curve baseline.
+The board mixes three player types with different data, so it's built in two
+stages: `compute_darko_rows` turns DARKO+availability records into season values,
+the script blends those with ESPN (and appends ESPN-only rookies), and
+`finalize` ranks whatever it's handed by final value. Ranking is by projected
+SEASON value (per-game × games), so availability counts.
 """
 from __future__ import annotations
 
 from typing import Mapping
 
-from fba import scoring
+from fba import availability, scoring
 
 TIER_BOUNDS = [(1, 12, "T1 Elite"), (13, 30, "T2 Core"), (31, 60, "T3 Starter"),
                (61, 100, "T4 Rotation"), (101, 10_000, "T5 Deep")]
@@ -25,36 +23,41 @@ def _tier(rank: int) -> str:
     return "T5 Deep"
 
 
-def build_board(
+def compute_darko_rows(
     records: list[dict],
     scoring_formula: Mapping[str, float],
     min_minutes: float = 12.0,
 ) -> list[dict]:
-    """Rank projection records by projected per-game fantasy points.
+    """Turn DARKO projection records into per-player season values.
 
-    `min_minutes` drops players projected for fewer than that many minutes
-    (deep-bench noise). Growth is projected minus last-season fantasy points,
-    or None when no baseline is available (e.g. a rookie).
+    Produces per-game FP, projected games, the DARKO season value, and how many
+    seasons of history DARKO has (which sets the blend weight downstream). Does
+    not rank — the script blends with ESPN first.
     """
     rows = []
     for rec in records:
         proj_line = rec["proj_line"]
         if proj_line.get("MIN", 0.0) < min_minutes:
             continue
-        proj_fpts = scoring.fantasy_points(proj_line, scoring_formula)
-        baseline = rec.get("baseline_line")
-        baseline_fpts = scoring.fantasy_points(baseline, scoring_formula) if baseline else None
+        fpg = scoring.fantasy_points(proj_line, scoring_formula)
+        games = availability.projected_games(rec.get("gp_history") or [], rec.get("age"))
         rows.append(
             {
                 "name": rec["name"],
+                "team": rec.get("team"),
                 "age": rec.get("age"),
-                "proj_fpts_pg": proj_fpts,
-                "baseline_fpts_pg": baseline_fpts,
-                "growth": None if baseline_fpts is None else round(proj_fpts - baseline_fpts, 2),
+                "darko_fpg": fpg,
+                "games": games,
+                "darko_value": availability.season_value(fpg, games),
+                "seasons": len(rec.get("gp_history") or []),
             }
         )
+    return rows
 
-    rows.sort(key=lambda r: r["proj_fpts_pg"], reverse=True)
+
+def finalize(rows: list[dict]) -> list[dict]:
+    """Sort by final `value` (projected season total) and assign rank + tier."""
+    rows.sort(key=lambda r: r["value"], reverse=True)
     for i, row in enumerate(rows, start=1):
         row["rank"] = i
         row["tier"] = _tier(i)
