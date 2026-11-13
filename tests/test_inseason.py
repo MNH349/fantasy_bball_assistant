@@ -56,3 +56,23 @@ def test_droppable_protects_high_ros_players():
     ]
     drops = inseason_report.droppable(mine, replacement_ros=1000.0)
     assert [r["name"] for r in drops] == ["Deadweight"]  # hurt stud is shielded
+
+
+def _board_minutes(gp, season_min, prior_min):
+    darko = {1: {"name": "P", "age": 25, "darko_minutes": 20.0, "tm_id": 0, "dpm": 0.0, "rates": RATES}}
+    current = {1: {"gp": gp, "team": "AAA", "line": {"MIN": season_min, "PTS": 20.0}}}
+    rows = inseason.value_board(
+        darko, current, gp_history={}, prior_minutes={1: prior_min},
+        team_dates={"AAA": ["2026-12-01"]}, formula=PTS_ONLY, tricode_by_id={},
+    )
+    return rows[0]["minutes"]
+
+
+def test_role_change_shows_up_quickly():
+    # 10 games at 36 MPG after a 28 MPG season: 2/3 weight on this season.
+    assert _board_minutes(gp=10, season_min=36.0, prior_min=28.0) == 33.3
+
+
+def test_one_game_minutes_fluke_stays_damped():
+    # A single 30-minute game for a 10 MPG player barely moves his role.
+    assert _board_minutes(gp=1, season_min=30.0, prior_min=10.0) == 13.3

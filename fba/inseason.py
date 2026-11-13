@@ -24,6 +24,9 @@ from typing import Iterable, Mapping, Sequence
 from fba import availability, names, projections, schedule, scoring
 
 NUDGE_PRIOR_GAMES = 20   # K: games played at which actuals and DARKO weigh equally
+# Minutes settle within a few games, much faster than production, so role
+# changes get a short ramp: half weight on this season's minutes after 5 games.
+MINUTES_PRIOR_GAMES = 5
 FULL_SEASON = 82
 ESPN_ONLY_MIN_AVG = 18.0  # ignore deep-bench ESPN projections (fantasy pts/game)
 # Default availability for a player with no NBA history (true rookie).
@@ -120,10 +123,10 @@ def value_board(
     for nba_id, d in darko.items():
         cur = current_stats.get(nba_id)
         gp = cur["gp"] if cur else 0
-        # Blend role minutes the same way as production: a one-game minutes
-        # fluke shouldn't inflate a deep player, so regress toward last season's
-        # minutes until the sample grows (DARKO's minutes as a last resort).
-        w_min = nudge_weight(gp)
+        # Blend role minutes toward last season's (DARKO's as a last resort) so a
+        # one-game fluke can't inflate a deep player, but on a short ramp so a
+        # real role change shows up within a couple of weeks.
+        w_min = nudge_weight(gp, k=MINUTES_PRIOR_GAMES)
         prior_min = prior_minutes.get(nba_id) or d["darko_minutes"]
         season_min = cur["line"].get("MIN", 0.0) if (cur and gp > 0) else None
         role_minutes = prior_min if season_min is None else (1 - w_min) * prior_min + w_min * season_min
