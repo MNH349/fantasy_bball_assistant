@@ -147,7 +147,7 @@ shown as a trend signal only — it never drives the fantasy-points value.
 
 **Streaming plan.** Your 2 lowest players (average rank of FP/G and ROS) are
 streamer spots; core spots only change for ROS upgrades. Each night is projected
-per player (FP/G adjusted for injured teammates' minutes, last-5 form and opponent
+per player (FP/G adjusted for half of injured teammates' minutes and for opponent
 pace). The planner maps your open starting slots night by night and picks the
 pickups that add the most lineup points through Sunday within the 7 adds per
 matchup, each worth at least +8 points. OUT core players go to IR first.

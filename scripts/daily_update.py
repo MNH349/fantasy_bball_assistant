@@ -100,7 +100,7 @@ def main() -> None:
 
     print("Projecting the rest of the matchup night by night ...")
     proj = tonight.nightly(rows, days, team_games, stats_nba.fetch_game_logs(use_cache=False),
-                           formula, stats_nba.team_pace())
+                           stats_nba.team_pace())
 
     storage.save_snapshot(rows, today_iso)
     rank, snap_day, prev_day = ranking.weekly_for(today_iso)

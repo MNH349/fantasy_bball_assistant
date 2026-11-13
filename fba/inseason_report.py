@@ -103,7 +103,7 @@ def build_daily(today: str, my_team_name: str, mine: list[dict], free: list[dict
     lines = [
         f"# In-Season Report — {today}", "",
         "Projections blend DARKO with this season's production. **Tonight** adjusts "
-        "for teammates out, recent form and opponent pace. **ROS** = FP/G × games left.", "",
+        "for teammates out and opponent pace. **ROS** = FP/G × games left.", "",
     ]
     lines += _plan_section(plan, today)
 
