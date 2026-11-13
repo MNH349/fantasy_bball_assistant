@@ -15,6 +15,9 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 DATA_CACHE_DIR = PROJECT_ROOT / "data_cache"
 # Daily in-season snapshots (gitignored with the rest of data_cache/).
 HISTORY_DB = DATA_CACHE_DIR / "history.db"
+# One player name per line; the trade finder never offers them. Gitignored —
+# the repo is public and this list is strategy.
+UNTOUCHABLES_FILE = PROJECT_ROOT / "untouchables.txt"
 
 load_dotenv(PROJECT_ROOT / ".env")
 

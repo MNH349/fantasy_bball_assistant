@@ -35,3 +35,10 @@ def test_player_history_is_oldest_first(tmp_path, monkeypatch):
     storage.save_snapshot([{"name": "A", "dpm": 2.0}], "2026-10-27")
     hist = storage.player_history("A")
     assert [h["snapshot_date"] for h in hist] == ["2026-10-26", "2026-10-27"]
+
+
+def test_rerun_replaces_the_whole_day(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    storage.save_snapshot([{"name": "A"}, {"name": "Dropped"}], "2026-10-27")
+    storage.save_snapshot([{"name": "A"}], "2026-10-27")
+    assert [r["name"] for r in storage.load_snapshot("2026-10-27")] == ["A"]

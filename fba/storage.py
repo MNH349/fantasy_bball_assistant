@@ -8,6 +8,7 @@ math lives elsewhere; this module only reads and writes.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import date
@@ -24,12 +25,22 @@ COLUMNS = (
     "usg",          # season-to-date usage (role)
     "actual_fpg",   # season-to-date fantasy points per game, league scoring
     "darko_fpg",    # DARKO rates x current role, league scoring
-    "value_fpg",    # blended in-season per-game value (the K=20 hybrid)
+    "value_fpg",    # blended in-season per-game value (DARKO + actuals, K=5)
     "games_left",   # projected games remaining this season
     "value_ros",    # value_fpg x games_left
     "games_week",   # NBA games in the current scoring period
     "value_week",   # value_fpg x games_week
+    "positions",    # ESPN lineup slots he can fill, e.g. "PG,SG,G,UT"
+    "lineup_slot",  # where his fantasy owner has him ("IR" included)
+    "espn_avg",     # ESPN's season-to-date FP/G — what other managers see
+    "waiver_until", # ISO date a waiver-wire player can be added
+    "espn_games",   # games behind espn_avg
+    "espn_proj_avg",# ESPN's own projected FP/G
 )
+
+# Columns added after the first release; migrated onto older databases.
+_ADDED_COLUMNS = {"positions": "TEXT", "lineup_slot": "TEXT", "espn_avg": "REAL", "waiver_until": "TEXT",
+                  "espn_games": "INTEGER", "espn_proj_avg": "REAL"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS player_snapshots (
@@ -49,6 +60,12 @@ CREATE TABLE IF NOT EXISTS player_snapshots (
     value_ros     REAL,
     games_week    INTEGER,
     value_week    REAL,
+    positions     TEXT,
+    lineup_slot   TEXT,
+    espn_avg      REAL,
+    waiver_until  TEXT,
+    espn_games    INTEGER,
+    espn_proj_avg REAL,
     PRIMARY KEY (snapshot_date, name)
 );
 """
@@ -62,6 +79,10 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     try:
         conn.execute(_SCHEMA)
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(player_snapshots)")}
+        for col, kind in _ADDED_COLUMNS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE player_snapshots ADD COLUMN {col} {kind}")
         yield conn
         conn.commit()
     finally:
@@ -69,15 +90,16 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 def save_snapshot(rows: Sequence[dict], snapshot_date: str | None = None) -> str:
-    """Upsert a day's player rows. Re-running the same day overwrites it.
+    """Save a day's player rows, replacing everything saved for that day before.
 
     Each row is a dict; any missing column is stored NULL. Returns the date used.
     """
     day = snapshot_date or date.today().isoformat()
     cols = ("snapshot_date", *COLUMNS)
     placeholders = ", ".join("?" for _ in cols)
-    sql = f"INSERT OR REPLACE INTO player_snapshots ({', '.join(cols)}) VALUES ({placeholders})"
+    sql = f"INSERT INTO player_snapshots ({', '.join(cols)}) VALUES ({placeholders})"
     with connect() as conn:
+        conn.execute("DELETE FROM player_snapshots WHERE snapshot_date = ?", (day,))
         conn.executemany(
             sql, [(day, *(r.get(c) for c in COLUMNS)) for r in rows]
         )
@@ -122,3 +144,27 @@ def snapshot_dates() -> list[str]:
             "SELECT DISTINCT snapshot_date FROM player_snapshots ORDER BY snapshot_date"
         ).fetchall()
     return [r["snapshot_date"] for r in rows]
+
+
+def snapshot_on_or_before(day: str) -> str | None:
+    """Most recent snapshot date on or before `day` (for week-over-week deltas)."""
+    earlier = [d for d in snapshot_dates() if d <= day]
+    return earlier[-1] if earlier else None
+
+
+# The day's computed plan, trade ideas and nightly projections, one JSON file per
+# day beside the snapshot DB, so the dashboard reads results instead of redoing work.
+_EXTRAS_DIR = DATA_CACHE_DIR / "daily"
+
+
+def save_extras(day: str, payload: dict) -> None:
+    _EXTRAS_DIR.mkdir(parents=True, exist_ok=True)
+    (_EXTRAS_DIR / f"{day}.json").write_text(json.dumps(payload))
+
+
+def load_extras(day: str | None = None) -> dict:
+    """A day's plan/trades/projections (default: the most recent day saved)."""
+    files = sorted(_EXTRAS_DIR.glob("*.json")) if _EXTRAS_DIR.exists() else []
+    if day:
+        files = [f for f in files if f.stem == day]
+    return json.loads(files[-1].read_text()) if files else {}

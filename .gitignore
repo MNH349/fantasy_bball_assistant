@@ -12,3 +12,6 @@ __pycache__/
 reports/
 data_cache/
 *.log
+
+# Private strategy (repo is public)
+untouchables.txt

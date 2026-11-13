@@ -86,3 +86,47 @@ def games_history(seasons: list[str] = CAREER_SEASONS) -> dict[int, list[int]]:
         for rec in fetch_player_stats(season=season):
             history.setdefault(rec["player_id"], []).append(rec.get("gp", 0))
     return history
+
+
+CURRENT_SEASON = "2026-27"
+
+
+def fetch_game_logs(season: str = CURRENT_SEASON, use_cache: bool = True) -> list[dict]:
+    """Every player-game of the season: player_id, team, game_id, game_date, line.
+
+    One request covers the whole league. Cached; the daily job refreshes it.
+    """
+    DATA_CACHE_DIR.mkdir(exist_ok=True)
+    cache = DATA_CACHE_DIR / f"nba_game_logs_{season}.json"
+    if use_cache and cache.exists():
+        return json.loads(cache.read_text())
+
+    from nba_api.stats.endpoints import leaguegamelog
+
+    df = leaguegamelog.LeagueGameLog(
+        season=season, player_or_team_abbreviation="P",
+        season_type_all_star="Regular Season", timeout=45,
+    ).get_data_frames()[0]
+    logs = [
+        {
+            "player_id": int(row["PLAYER_ID"]),
+            "team": row["TEAM_ABBREVIATION"],
+            "game_id": row["GAME_ID"],
+            "game_date": row["GAME_DATE"],
+            "line": {key: float(row[col] or 0) for col, key in NBA_COL_TO_KEY.items() if col in row},
+        }
+        for _, row in df.iterrows()
+    ]
+    cache.write_text(json.dumps(logs))
+    return logs
+
+
+def team_pace(season: str = CURRENT_SEASON) -> dict[str, float]:
+    """{tricode: possessions per 48 minutes} for every team this season."""
+    from nba_api.stats.endpoints import leaguedashteamstats
+
+    df = leaguedashteamstats.LeagueDashTeamStats(
+        season=season, measure_type_detailed_defense="Advanced", timeout=45,
+    ).get_data_frames()[0]
+    tricodes = team_tricode_by_id()
+    return {tricodes[int(r["TEAM_ID"])]: float(r["PACE"]) for _, r in df.iterrows()}

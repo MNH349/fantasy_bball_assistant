@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from config import DATA_CACHE_DIR
 
 SEASON = "2026-27"
-_CACHE = DATA_CACHE_DIR / f"schedule_{SEASON}.json"
+_CACHE = DATA_CACHE_DIR / f"schedule_games_{SEASON}.json"
 _CACHE_TTL_HOURS = 20  # refetch roughly once a day
 
 
@@ -32,11 +32,11 @@ def _fetch_raw() -> dict:
     ).get_dict()
 
 
-def team_game_dates(use_cache: bool = True) -> dict[str, list[str]]:
-    """Map NBA tricode -> sorted ISO dates it plays a regular-season game.
+def team_games(use_cache: bool = True) -> dict[str, dict[str, str]]:
+    """Map NBA tricode -> {ISO date: opponent tricode} for regular-season games.
 
-    Each game contributes a date to both the home and away team. Cached to
-    data_cache/ and refetched about once a day so the daily job stays cheap.
+    Cached to data_cache/ and refetched about once a day so the daily job stays
+    cheap. Games whose teams are still TBD (NBA Cup knockouts) are skipped.
     """
     if use_cache and _CACHE.exists():
         age_h = (time.time() - _CACHE.stat().st_mtime) / 3600
@@ -44,21 +44,24 @@ def team_game_dates(use_cache: bool = True) -> dict[str, list[str]]:
             return json.loads(_CACHE.read_text())
 
     raw = _fetch_raw()
-    dates: dict[str, list[str]] = {}
+    games: dict[str, dict[str, str]] = {}
     for day in raw["leagueSchedule"]["gameDates"]:
         for g in day["games"]:
-            if not _is_regular_season(g["gameId"]):
+            home, away = g["homeTeam"].get("teamTricode"), g["awayTeam"].get("teamTricode")
+            if not _is_regular_season(g["gameId"]) or not (home and away):
                 continue
             iso = g["gameDateEst"][:10]
-            for side in ("homeTeam", "awayTeam"):
-                tri = g[side].get("teamTricode")
-                if tri:
-                    dates.setdefault(tri, []).append(iso)
+            games.setdefault(home, {})[iso] = away
+            games.setdefault(away, {})[iso] = home
 
-    dates = {tri: sorted(ds) for tri, ds in dates.items()}
     DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _CACHE.write_text(json.dumps(dates))
-    return dates
+    _CACHE.write_text(json.dumps(games))
+    return games
+
+
+def team_game_dates(use_cache: bool = True) -> dict[str, list[str]]:
+    """Map NBA tricode -> sorted ISO dates it plays a regular-season game."""
+    return {tri: sorted(opps) for tri, opps in team_games(use_cache).items()}
 
 
 def current_period(today: date | None = None) -> tuple[str, str]:

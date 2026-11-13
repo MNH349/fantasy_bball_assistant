@@ -10,12 +10,16 @@ drop candidates, and trade targets — short-term (this/next week) and rest-of-s
 - ✅ **Phase 2 — Draft board**: rank players by projected 26-27 fantasy points
   (2025-26 stats + projected growth).
 - ✅ **Phase 3 — In-season valuation**: DARKO talent blended with season-to-date
-  production (K=20 confidence ramp), split into rest-of-season and this-week
+  production (K=5 confidence ramp), split into rest-of-season and this-week
   values (schedule-aware game counts).
-- ✅ **Phase 4 — Daily report**: waiver upgrades (protected drops), streaming,
-  risers/fallers, and a CLI trade evaluator; a daily snapshot builds history.
-- 🔜 **Phase 5 — Web dashboard** over the snapshot history (daily run already live
-  via launchd).
+- ✅ **Phase 4 — Daily report**: a week-long streaming plan within the 7-adds
+  limit, core ROS upgrades, a trade finder + evaluator, and a weekly top 100.
+- ✅ **Phase 5 — Dashboard**: always-on Streamlit app on this Mac, reachable from
+  your phone through Tailscale.
+
+Only players on **standard NBA contracts** are considered (no two-way, 10-day,
+G-League or unsigned players), and lists focus on the **top 120** by
+rest-of-season value plus a **watch list** of fast climbers just below it.
 
 ## Setup
 
@@ -41,42 +45,70 @@ secrets — they go only in `.env`, which is git-ignored.**
 
 ## Run
 
+Everything below runs automatically; these are for doing it by hand.
+
 ```bash
-# Phase 1 — verify the connection and see your league snapshot + scoring formula
-python scripts/diagnostics.py
+# Daily update -> reports/inseason_latest.md, the snapshot, and (Mondays) the top 100
+venv/bin/python scripts/daily_update.py
 
-# Phase 2 — build the draft cheat sheet -> reports/draft_board.{csv,md}
-python scripts/draft_board.py
+# Grade any trade (same two-way check as the trade finder)
+venv/bin/python scripts/evaluate_trade.py --give "Zion Williamson" --get "AJ Dybantsa"
 
-# Phase 3/4 — daily in-season update -> reports/inseason_latest.md (+ snapshot)
-python scripts/daily_update.py
+# Dashboard by hand (normally the launchd agent keeps it running)
+venv/bin/streamlit run dashboard.py
 
-# Evaluate a proposed trade against the latest snapshot
-python scripts/evaluate_trade.py \
-    --give "Deni Avdija, Naz Reid, Darryn Peterson" \
-    --get  "Jaden McDaniels, Anthony Black, Bam Adebayo"
+# Preseason tools
+venv/bin/python scripts/diagnostics.py      # check the league connection
+venv/bin/python scripts/draft_board.py      # draft cheat sheet
 
 # Tests (no credentials needed)
-pytest
+venv/bin/python -m pytest
 ```
 
-The draft board builds even **without** credentials (it uses a default scoring
-formula and public NBA stats); connecting just swaps in your league's exact
-Points values. The in-season update needs credentials (it reads your rosters).
+### What runs on its own (macOS launchd)
 
-### Run it daily (macOS launchd)
+| Agent | What it does |
+|---|---|
+| `com.tftaddict.fba-daily` | 08:00 every day: values everyone, plans the week's streaming moves, finds trades, writes reports. Logs to `daily_update.log`. |
+| `com.tftaddict.fba-dashboard` | Keeps the dashboard running at <http://127.0.0.1:8501> (this Mac only). Logs to `dashboard.log`. |
 
-`scripts/daily_update.py` is meant to run every morning so the snapshot history
-(and the trend/riser columns) fill in. A ready-made agent is in `launchd/`:
+Install (or reinstall after moving the project):
 
 ```bash
-cp launchd/com.tftaddict.fba-daily.plist ~/Library/LaunchAgents/
+cp launchd/*.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.tftaddict.fba-daily.plist
-launchctl start com.tftaddict.fba-daily   # run once now to verify
+launchctl load ~/Library/LaunchAgents/com.tftaddict.fba-dashboard.plist
 ```
 
-It runs at 08:00 local (captures the prior night's box scores + DARKO's daily
-refresh) and logs to `daily_update.log`. Your cookies never leave the machine.
+If the Mac is shut down at 08:00 that day's run is skipped; the dashboard runs it
+automatically the next time you open it (or click **Refresh now**).
+
+### Untouchables
+
+To keep players out of trade suggestions, list them one per line in
+`untouchables.txt` at the project root. It's gitignored — this repo is public and
+the list is strategy.
+
+### Dashboard on your phone (Tailscale)
+
+The dashboard only listens on this Mac. Tailscale connects your own signed-in
+devices privately, so your phone can open it from anywhere without exposing it to
+the internet or your Wi-Fi network.
+
+1. Install **Tailscale** on the Mac (Mac App Store or tailscale.com/download) and
+   sign in. In its menu-bar settings, turn on the command-line tool.
+2. Install **Tailscale** on your phone and sign in with the **same account**.
+3. On the Mac, run once:
+   ```bash
+   tailscale serve --bg 8501
+   ```
+   The first time, it may print a link to turn on HTTPS for your tailnet — open
+   it, approve, and run the command again. It prints your dashboard address,
+   like `https://<mac-name>.<tailnet>.ts.net`.
+4. On the phone (Tailscale on), open that address and **Add to Home Screen**.
+
+Check it with `tailscale serve status`; turn it off with `tailscale serve reset`.
+The Mac has to be on and awake for the phone to reach it.
 
 ## Layout
 
@@ -90,20 +122,39 @@ refresh) and logs to `daily_update.log`. Your cookies never leave the machine.
 - `fba/schedule.py` — NBA schedule → games per period / remaining.
 - `fba/availability.py` — career-based games-played (durability) model.
 - `fba/storage.py` — SQLite daily snapshot store (`data_cache/history.db`).
-- `fba/inseason_report.py` — the daily Markdown report.
+- `fba/contracts.py` — who's on a standard NBA contract (all 30 rosters, daily).
+- `fba/ranking.py` — weekly top 100, watch list and fallers.
+- `fba/tonight.py` — single-game projections (teammates out, form, pace).
+- `fba/planner.py` — the week's streaming plan within the adds limit.
+- `fba/trades.py` — two-way trade assessment and the trade finder.
+- `fba/inseason_report.py` — the daily report and the weekly top 100.
+- `dashboard.py` — the Streamlit dashboard.
 - `scripts/` — runnable entry points (`diagnostics`, `draft_board`,
   `daily_update`, `evaluate_trade`).
 
 ## How in-season value is computed
 
-`value_fpg = (1 − w)·DARKO_fpg + w·actual_fpg`, where `w = games / (games + 20)`.
+`value_fpg = (1 − w)·DARKO_fpg + w·actual_fpg`, where `w = games / (games + 5)`.
 DARKO (re-pulled daily) anchors the estimate while the sample is small; actual
-production earns weight as games pile up. DARKO's rates run on each player's role
-(minutes regressed from last season early on, toward season-to-date as it grows),
-so role changes flow through immediately. Two horizons come out: **ROS** (per-game
-× games left = durability × team games remaining) and **Week** (per-game × games
+production earns weight as games pile up. DARKO's rates run on each player's role:
+minutes regress toward last season on a short 5-game ramp, so role changes show up
+within a couple of weeks. Rookies (no DARKO) use ESPN's preseason projection as
+the prior on the same K=5 ramp. Two horizons come out: **ROS** (per-game
+× games left = durability × team games remaining, with durability counted at half
+strength so injury history can't outweigh per-game production) and **Week** (per-game × games
 in the current Mon–Sun period; zeroed for players who are OUT). DARKO's **DPM** is
 shown as a trend signal only — it never drives the fantasy-points value.
+
+**Streaming plan.** Your 2 lowest players (average rank of FP/G and ROS) are
+streamer spots; core spots only change for ROS upgrades. Each night is projected
+per player (FP/G adjusted for injured teammates' minutes, last-5 form and opponent
+pace). The planner maps your open starting slots night by night and picks the
+pickups that add the most lineup points through Sunday within the 7 adds per
+matchup, each worth at least +8 points. OUT core players go to IR first.
+
+**Trades.** Each trade is judged on our ROS value for you (+3% to +15%) and on
+ESPN's season averages for them (no worse than −2%). An open roster spot counts
+as the lesser of the best free agent and whoever you'd otherwise cut for him.
 
 ## Data sources & caveats
 

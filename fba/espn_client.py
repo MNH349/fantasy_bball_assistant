@@ -102,28 +102,75 @@ def fetch_espn_player_data(cfg: Config, pool_size: int = 800) -> dict[str, dict]
     return out
 
 
-def fetch_roster_status(cfg: Config, pool_size: int = 800) -> dict:
-    """Who owns whom right now: {by_name: {...}, my_team_name}.
+def _waiver_dates(league) -> dict[str, str]:
+    """{player name: ISO date he clears waivers} for players on waivers now."""
+    import json
+    from datetime import datetime
 
-    For each player, `rostered_by` is the fantasy team name (None for a free
-    agent), `is_mine` flags your own roster, and `injury` is ESPN's status.
-    Drives the in-season add/drop logic (what's available, what's yours).
+    filters = {"players": {"filterStatus": {"value": ["WAIVERS"]}, "filterSlotIds": {"value": []},
+                           "limit": 200, "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}}
+    data = league.espn_request.league_get(
+        params={"view": "kona_player_info", "scoringPeriodId": league.current_week},
+        headers={"x-fantasy-filter": json.dumps(filters)},
+    )
+    return {
+        p["player"]["fullName"]: datetime.fromtimestamp(p["waiverProcessDate"] / 1000).date().isoformat()
+        for p in data.get("players", []) if p.get("waiverProcessDate")
+    }
+
+
+def _adds_since(league, team_name: str, since_iso: str) -> int:
+    """How many players `team_name` has added (FA or waiver) since `since_iso`."""
+    from datetime import datetime
+
+    adds, offset = 0, 0
+    while True:
+        page = league.recent_activity(size=25, offset=offset)
+        for act in page:
+            if datetime.fromtimestamp(act.date / 1000).date().isoformat() < since_iso:
+                return adds
+            adds += sum(1 for team, action, *_ in act.actions
+                        if team and team.team_name == team_name and action in ("FA ADDED", "WAIVER ADDED"))
+        if len(page) < 25:
+            return adds
+        offset += 25
+
+
+def fetch_roster_status(cfg: Config, period_start: str, pool_size: int = 800) -> dict:
+    """Who owns whom right now, plus what the planner needs about my team.
+
+    Returns {by_name, my_team_name, adds_used}. For each player: `rostered_by`
+    (fantasy team, None for a free agent), `is_mine`, `injury`, `positions`
+    (ESPN lineup slots he can fill, e.g. "PG,SG,G,UT"), `lineup_slot` (where
+    his owner has him, "IR" included), `espn_avg` (ESPN's season-to-date FP/G,
+    what other managers see) over `espn_games`, `espn_proj_avg` (ESPN's
+    projection), and
+    `waiver_until` (ISO date he can be added, if he's on waivers).
+    `adds_used` counts my adds since `period_start` (the matchup's Monday).
     """
     league = get_league(cfg)
     mine = my_team(league, cfg)
     my_name = getattr(mine, "team_name", None)
+    waivers = _waiver_dates(league)
 
     def injury_of(p):
         inj = getattr(p, "injuryStatus", None)
         return inj if isinstance(inj, str) else None  # FA objects return [] here
 
     def payload(p, rostered_by):
+        slots = [s for s in (getattr(p, "eligibleSlots", None) or []) if s not in ("BE", "IR")]
+        avg, total = getattr(p, "avg_points", 0.0) or 0.0, getattr(p, "total_points", 0.0) or 0.0
         return {
             "rostered_by": rostered_by,
             "is_mine": rostered_by == my_name,
             "injury": injury_of(p),
-            "espn_avg": getattr(p, "projected_avg_points", 0.0) or 0.0,
+            "positions": ",".join(slots),
+            "lineup_slot": getattr(p, "lineupSlot", None) if rostered_by else None,
+            "espn_avg": avg,
+            "espn_games": round(total / avg) if avg else 0,
+            "espn_proj_avg": getattr(p, "projected_avg_points", 0.0) or 0.0,
             "pro_team": getattr(p, "proTeam", None),
+            "waiver_until": None if rostered_by else waivers.get(p.name),
         }
 
     by_name: dict[str, dict] = {}
@@ -134,7 +181,11 @@ def fetch_roster_status(cfg: Config, pool_size: int = 800) -> dict:
     for p in league.free_agents(size=pool_size):
         if p.name and p.name not in by_name:
             by_name[p.name] = payload(p, None)
-    return {"by_name": by_name, "my_team_name": my_name}
+    return {
+        "by_name": by_name,
+        "my_team_name": my_name,
+        "adds_used": _adds_since(league, my_name, period_start) if my_name else 0,
+    }
 
 
 def fetch_espn_projections(cfg: Config, pool_size: int = 800) -> dict[str, dict]:

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Always-on Streamlit dashboard at http://127.0.0.1:8501 (this Mac only).
+
+  It listens on 127.0.0.1, so nothing else on your network can reach it. For
+  your phone, `tailscale serve` passes it through to your own Tailscale devices
+  only (see README). launchd restarts it if it ever stops.
+
+  Install:
+    cp launchd/com.tftaddict.fba-dashboard.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tftaddict.fba-dashboard.plist
+  Restart after code changes:
+    launchctl kickstart -k gui/$(id -u)/com.tftaddict.fba-dashboard
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.tftaddict.fba-dashboard.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tftaddict.fba-dashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mikey/fantasy_bball_assistant/venv/bin/streamlit</string>
+        <string>run</string>
+        <string>/Users/mikey/fantasy_bball_assistant/dashboard.py</string>
+        <string>--server.address</string>
+        <string>127.0.0.1</string>
+        <string>--server.port</string>
+        <string>8501</string>
+        <string>--server.headless</string>
+        <string>true</string>
+        <string>--browser.gatherUsageStats</string>
+        <string>false</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mikey/fantasy_bball_assistant</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mikey/fantasy_bball_assistant/dashboard.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mikey/fantasy_bball_assistant/dashboard.log</string>
+</dict>
+</plist>

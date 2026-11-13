@@ -1,42 +1,38 @@
-"""Daily in-season report: my team, waiver upgrades, streamers, risers/fallers.
+"""Markdown/CSV reports: the daily in-season report and the weekly top 100.
 
-Consumes valued rows (from fba.inseason) already tagged with fantasy ownership
-and injury status, plus the previous snapshot for day-over-day trends. Writes one
-dated Markdown file. The add/drop logic is deliberately conservative: drop
-candidates are ranked by rest-of-season value, not current production, and
-anything above replacement level is shielded — so a hurt star (whose ROS value
-stays high) never surfaces as droppable, only genuine deadweight does.
+The daily report leads with what to do today (streaming move, IR moves, adds
+left), then the rest of the week's plan, core ROS upgrades, trade ideas, and the
+roster. Core upgrades are deliberately conservative: drop candidates are ranked
+on rest-of-season value, so a hurt star (whose ROS stays high) never surfaces as
+droppable, only genuine deadweight does.
 """
 from __future__ import annotations
 
+import csv
+from datetime import date
 from pathlib import Path
 
-# How far below replacement a rostered player must sit before we call him
-# droppable, as a fraction of replacement value (a small cushion against noise).
+# How far below the best free agent a rostered player must sit before we call
+# him droppable, as a fraction of that value (a small cushion against noise).
 DROP_MARGIN = 0.97
 
 
 def _fmt(row: dict) -> str:
     inj = row.get("injury") or ""
-    tag = "" if inj in ("", "ACTIVE", None) else f" _{inj}_"
-    return f"{row['name']}{tag}"
+    return row["name"] + ("" if inj in ("", "ACTIVE") else f" _{inj}_")
 
 
 def _table(header: list[str], rows: list[list]) -> list[str]:
-    sep = ["---"] * len(header)
-    out = ["| " + " | ".join(header) + " |", "| " + " | ".join(sep) + " |"]
-    for r in rows:
-        out.append("| " + " | ".join(str(c) for c in r) + " |")
-    return out
+    out = ["| " + " | ".join(header) + " |", "| " + " | ".join("---" for _ in header) + " |"]
+    return out + ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
 
 
-def _board_line(r: dict) -> list:
-    return [_fmt(r), r.get("pro_team") or "", f"{r['value_fpg']:.1f}",
-            f"{r['games_left']:.0f}", f"{r['value_ros']:.0f}",
-            r["games_week"], f"{r['value_week']:.0f}", f"{r['dpm']:+.1f}"]
+def _day(iso: str) -> str:
+    return date.fromisoformat(iso).strftime("%a %m/%d")
 
 
-_BOARD_COLS = ["Player", "Tm", "FP/G", "GL", "ROS", "GW", "Week", "DPM"]
+def _base_positions(row: dict) -> str:
+    return "/".join(p for p in (row.get("positions") or "").split(",") if p in ("PG", "SG", "SF", "PF", "C"))
 
 
 def droppable(mine: list[dict], replacement_ros: float) -> list[dict]:
@@ -50,100 +46,136 @@ def droppable(mine: list[dict], replacement_ros: float) -> list[dict]:
     return sorted(pool, key=lambda r: r["value_ros"])
 
 
-def _risers_fallers(rows, prev_by_name, limit=8):
-    """Biggest day-over-day ROS-value swings among rostered/notable players."""
-    deltas = []
-    for r in rows:
-        prev = prev_by_name.get(r["name"])
-        if prev is None:
-            continue
-        deltas.append((round(r["value_ros"] - prev, 0), r))
-    deltas.sort(key=lambda d: d[0], reverse=True)
-    risers = [(d, r) for d, r in deltas if d > 0][:limit]
-    fallers = [(d, r) for d, r in deltas if d < 0][-limit:]
-    return risers, fallers
+def core_upgrades(core: list[dict], free: list[dict], limit: int = 6) -> list[tuple[dict, dict]]:
+    """(add, drop) pairs where a free agent beats a core player on ROS value."""
+    upgrades = sorted(free, key=lambda r: r["value_ros"], reverse=True)[:limit]
+    best_fa = upgrades[0]["value_ros"] if upgrades else 0.0
+    drops = droppable(core, best_fa)
+    return [(add, drop) for add, drop in zip(upgrades, drops) if add["value_ros"] > drop["value_ros"]]
 
 
-def build(rows: list[dict], prev_by_name: dict, replacement_ros: float,
-          today: str, my_team_name: str | None) -> str:
-    """Render the full daily report as a Markdown string."""
-    mine = [r for r in rows if r.get("is_mine")]
-    free = [r for r in rows if r.get("rostered_by") is None]
-    mine_ros = sorted(mine, key=lambda r: r["value_ros"], reverse=True)
+def _plan_section(plan: dict, today: str) -> list[str]:
+    todays = [m for m in plan["moves"] if m["day"] == today]
+    lines = ["## Today", "",
+             f"**Adds left this matchup: {7 - plan['adds_used']} of 7** "
+             f"({len(plan['moves'])} planned below).", ""]
+    for name in plan["ir_moves"]:
+        lines.append(f"- 🏥 **Move {name} to IR** — he's OUT; that frees a roster spot without a drop.")
+    for m in todays:
+        drop = f"drop **{m['drop']}**" if m["drop"] else "no drop needed (open spot)"
+        lines.append(f"- ➕ **Add {m['add']}** ({m['add_team']}), {drop} — "
+                     f"+{m['gain']:.0f} projected lineup points this week.")
+    if not todays and not plan["ir_moves"]:
+        lines.append("- No move today — nothing clears the +8 point bar.")
+    lines += ["", f"Open starting slots tonight: **{plan['open_slots_after'].get(today, 0)}**.", "",
+              "## This week's streaming plan", ""]
+    if plan["moves"]:
+        lines += _table(["Day", "Add", "Tm", "Drop", "Projected games", "Gain"], [
+            [_day(m["day"]), m["add"], m["add_team"] or "", m["drop"] or "(open spot)",
+             ", ".join(f"{_day(d)[:3]} {fp:.0f}" for d, fp in m["games"].items()), f"+{m['gain']:.0f}"]
+            for m in plan["moves"]])
+    else:
+        lines.append("_No pickups planned — your lineup is full on the nights that matter._")
+    lines += ["", "Open starting slots by night (before → after the plan): " + ", ".join(
+        f"{_day(d)[:3]} {plan['open_slots_before'][d]}→{plan['open_slots_after'][d]}" for d in plan["days"]),
+        "", f"Projected lineup points through Sunday: {plan['points_before']:.0f} → "
+            f"**{plan['points_after']:.0f}**.", f"Streamer spots: {', '.join(plan['streamers'])}."]
+    return lines
 
+
+def _trade_section(trades: list[dict]) -> list[str]:
+    lines = ["", "## Trade ideas", "",
+             "_You gain 3–15% on our ROS value; it looks even or better to them on ESPN's numbers._", ""]
+    if not trades:
+        return lines + ["_No trades fit both bands today._"]
+    rows = []
+    for t in trades:
+        extras = ([f"+ add {n}" for n in t["my_fill"]] + [f"they drop {n}" for n in t["their_drop"]])
+        rows.append([t["team"], " + ".join(t["give"]), " + ".join(t["get"]), "; ".join(extras) or "—",
+                     f"{t['my_pct']:+.0%}", f"{t['their_pct']:+.0%}"])
+    return lines + _table(["Team", "You give", "You get", "Roster spot", "You (ours)", "Them (ESPN)"], rows)
+
+
+def build_daily(today: str, my_team_name: str, mine: list[dict], free: list[dict],
+                plan: dict, trades: list[dict], proj: dict) -> str:
+    """Render the daily report as a Markdown string."""
+    core = [r for r in mine if r["name"] not in plan["streamers"] and r.get("lineup_slot") != "IR"]
     lines = [
-        f"# In-Season Report — {today}",
-        "",
-        "Value blends DARKO talent with season-to-date production (weight on "
-        "actuals ramps with games played, K=20). **ROS** = per-game × games left "
-        "(durability × team games remaining); **Week** = per-game × games in the "
-        "current Mon–Sun period. **DPM** is DARKO's impact rating — a *trend* "
-        "signal only, it does not drive value.",
-        "",
-        f"## {my_team_name or 'My team'} — rest of season",
-        "",
+        f"# In-Season Report — {today}", "",
+        "Projections blend DARKO with this season's production. **Tonight** adjusts "
+        "for teammates out, recent form and opponent pace. **ROS** = FP/G × games left.", "",
     ]
-    lines += _table(_BOARD_COLS, [_board_line(r) for r in mine_ros])
+    lines += _plan_section(plan, today)
 
-    # --- Waiver upgrades (ROS), each paired with a protected drop ----------
-    drop_pool = droppable(mine_ros, replacement_ros)
-    upgrades = sorted(free, key=lambda r: r["value_ros"], reverse=True)[:10]
+    lines += ["", "## Core upgrades — rest of season", ""]
+    pairs = core_upgrades(core, free)
+    lines += (_table(["Add", "Tm", "ROS", "Drop", "ROS", "Δ"], [
+        [_fmt(a), a.get("pro_team") or "", f"{a['value_ros']:.0f}", _fmt(d), f"{d['value_ros']:.0f}",
+         f"+{a['value_ros'] - d['value_ros']:.0f}"] for a, d in pairs])
+        if pairs else ["_No free agent beats a core player on rest-of-season value._"])
 
-    lines += ["", "## Waiver upgrades — rest of season", ""]
-    if not drop_pool:
-        lines += ["_No droppable deadweight: every rostered player is above "
-                  "replacement. Only make a move for a clear ROS upgrade._", ""]
-    pair_rows = []
-    for i, add in enumerate(upgrades):
-        drop = drop_pool[i] if i < len(drop_pool) else None
-        if drop is None or add["value_ros"] <= drop["value_ros"]:
-            continue
-        pair_rows.append([
-            _fmt(add), add.get("pro_team") or "", f"{add['value_ros']:.0f}",
-            "→", _fmt(drop), f"{drop['value_ros']:.0f}",
-            f"+{add['value_ros'] - drop['value_ros']:.0f}",
-        ])
-    if pair_rows:
-        lines += _table(["Add", "Tm", "ROS", "", "Drop", "ROS", "Δ"], pair_rows)
-    else:
-        lines += ["_No free agent beats a droppable player on ROS value right now._"]
+    lines += _trade_section(trades)
 
-    # --- Streaming this week (schedule-driven) -----------------------------
-    streamers = sorted(free, key=lambda r: r["value_week"], reverse=True)[:12]
-    lines += ["", "## Streaming this week — most fantasy points left in the period", ""]
-    lines += _table(["Player", "Tm", "GW", "Week", "FP/G", "ROS"],
-                    [[_fmt(r), r.get("pro_team") or "", r["games_week"],
-                      f"{r['value_week']:.0f}", f"{r['value_fpg']:.1f}",
-                      f"{r['value_ros']:.0f}"] for r in streamers])
-
-    # --- Risers / fallers (needs yesterday) --------------------------------
-    lines += ["", "## Risers & fallers (vs. last snapshot)", ""]
-    if not prev_by_name:
-        lines += ["_No prior snapshot yet — trends appear once the daily job has "
-                  "run on two different days._"]
-    else:
-        risers, fallers = _risers_fallers(rows, prev_by_name)
-        lines += ["**Risers**", ""]
-        lines += _table(["Player", "Tm", "ΔROS", "ROS", "DPM"],
-                        [[_fmt(r), r.get("pro_team") or "", f"+{d:.0f}",
-                          f"{r['value_ros']:.0f}", f"{r['dpm']:+.1f}"] for d, r in risers] or [["—", "", "", "", ""]])
-        lines += ["", "**Fallers**", ""]
-        lines += _table(["Player", "Tm", "ΔROS", "ROS", "DPM"],
-                        [[_fmt(r), r.get("pro_team") or "", f"{d:.0f}",
-                          f"{r['value_ros']:.0f}", f"{r['dpm']:+.1f}"] for d, r in fallers] or [["—", "", "", "", ""]])
-
-    # --- Top overall board -------------------------------------------------
-    lines += ["", "## Top 25 overall — rest of season", ""]
-    lines += _table(_BOARD_COLS, [_board_line(r) for r in rows[:25]])
-
+    def role(r):
+        return "IR" if r.get("lineup_slot") == "IR" else "streamer" if r["name"] in plan["streamers"] else "core"
+    lines += ["", f"## {my_team_name}", ""]
+    lines += _table(["Player", "Tm", "Pos", "Role", "FP/G", "ESPN avg", "ROS", "Tonight"], [
+        [_fmt(r), r.get("pro_team") or "", _base_positions(r), role(r), f"{r['value_fpg']:.1f}",
+         f"{r.get('espn_avg') or 0:.1f}", f"{r['value_ros']:.0f}", f"{proj.get(r['name'], {}).get(today, 0):.0f}"]
+        for r in sorted(mine, key=lambda r: r["value_ros"], reverse=True)])
     return "\n".join(lines) + "\n"
 
 
-def write_daily_report(rows, prev_by_name, replacement_ros, today, my_team_name,
-                       out_dir: Path) -> Path:
+def write_daily_report(text: str, today: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    text = build(rows, prev_by_name, replacement_ros, today, my_team_name)
     path = out_dir / f"inseason_{today}.md"
     path.write_text(text)
     (out_dir / "inseason_latest.md").write_text(text)
+    return path
+
+
+# --- Weekly top 100 -------------------------------------------------------
+def _move(r: dict) -> str:
+    if r["rank_change"] is None:
+        return "new"
+    return "—" if r["rank_change"] == 0 else f"{'▲' if r['rank_change'] > 0 else '▼'}{abs(r['rank_change'])}"
+
+
+def _rank_line(r: dict) -> list:
+    return [r["rank"], _move(r), _fmt(r), r.get("pro_team") or "", _base_positions(r),
+            f"{r['value_fpg']:.1f}", f"{r.get('espn_avg') or 0:.1f}", f"{r['games_left']:.0f}",
+            f"{r['value_ros']:.0f}", r.get("rostered_by") or "FA", r.get("tag", "")]
+
+
+_RANK_COLS = ["Rk", "Move", "Player", "Tm", "Pos", "FP/G", "ESPN avg", "GL", "ROS", "Owner", "Tag"]
+
+
+def build_top100(ranking: dict, snap_day: str, prev_day: str | None) -> str:
+    vs = f"vs {prev_day}" if prev_day else "no earlier snapshot to compare"
+    lines = [f"# Top 100 — week of {snap_day}", "",
+             f"Standard-contract players ranked by rest-of-season value ({vs}). ▲/▼ = spots moved.", ""]
+    lines += _table(_RANK_COLS, [_rank_line(r) for r in ranking["top"]])
+    lines += ["", "## Watch list — ranks 121–160 climbing fast", "",
+              "_Up 15+ spots or +4 MPG in the last week._", ""]
+    lines += (_table(_RANK_COLS + ["ΔMPG"], [_rank_line(r) + [f"{r['minutes_change'] or 0:+.1f}"]
+                                           for r in ranking["watch"]])
+              if ranking["watch"] else ["_Nobody below the core is climbing fast this week._"])
+    lines += ["", "## Fallers — core players down 15+ spots", ""]
+    lines += (_table(_RANK_COLS, [_rank_line(r) for r in ranking["fallers"]])
+              if ranking["fallers"] else ["_No big fallers this week._"])
+    return "\n".join(lines) + "\n"
+
+
+def write_top100(ranking: dict, snap_day: str, prev_day: str | None, out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    text = build_top100(ranking, snap_day, prev_day)
+    path = out_dir / f"top100_{snap_day}.md"
+    path.write_text(text)
+    (out_dir / "top100_latest.md").write_text(text)
+    fields = ["rank", "rank_change", "name", "pro_team", "positions", "value_fpg", "espn_avg",
+              "games_left", "value_ros", "rostered_by", "tag"]
+    with (out_dir / "top100_latest.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(ranking["top"])
     return path

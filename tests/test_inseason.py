@@ -23,9 +23,9 @@ def test_nudge_weight_ramps_with_sample():
 
 
 def test_project_player_blends_darko_and_actuals():
-    # darko_fpg = 30 (rates), actual = 40; at gp=20,K=20 -> w=0.5 -> value 35.
+    # darko_fpg = 30 (rates), actual = 40; at gp=K=5 -> w=0.5 -> value 35.
     out = inseason.project_player(
-        RATES, role_minutes=48.0, cur_line={"PTS": 40.0}, games_played=20,
+        RATES, role_minutes=48.0, cur_line={"PTS": 40.0}, games_played=inseason.NUDGE_PRIOR_GAMES,
         gp_history=[], age=None, formula=PTS_ONLY, games_week=3, team_games_left=70,
     )
     assert out["darko_fpg"] == 30.0
@@ -76,3 +76,10 @@ def test_role_change_shows_up_quickly():
 def test_one_game_minutes_fluke_stays_damped():
     # A single 30-minute game for a 10 MPG player barely moves his role.
     assert _board_minutes(gp=1, season_min=30.0, prior_min=10.0) == 13.3
+
+
+def test_durability_counts_at_half_strength():
+    # An iron man and a fragile player end up much closer than their raw rates.
+    sturdy, fragile = inseason.effective_durability(0.98), inseason.effective_durability(0.49)
+    assert sturdy - fragile == 0.49 * inseason.DURABILITY_WEIGHT
+    assert fragile < inseason.LEAGUE_DURABILITY < sturdy

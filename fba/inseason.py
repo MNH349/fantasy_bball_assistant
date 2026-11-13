@@ -23,7 +23,10 @@ from typing import Iterable, Mapping, Sequence
 
 from fba import availability, names, projections, schedule, scoring
 
-NUDGE_PRIOR_GAMES = 20   # K: games played at which actuals and DARKO weigh equally
+# K: games played at which actuals and DARKO weigh equally. Backtested on our
+# snapshots (forecast on day c vs. FP/G actually scored after c): K=5 missed by
+# 5.83 FP/G on average, K=20 by 6.08, DARKO alone by 6.46.
+NUDGE_PRIOR_GAMES = 5
 # Minutes settle within a few games, much faster than production, so role
 # changes get a short ramp: half weight on this season's minutes after 5 games.
 MINUTES_PRIOR_GAMES = 5
@@ -31,6 +34,17 @@ FULL_SEASON = 82
 ESPN_ONLY_MIN_AVG = 18.0  # ignore deep-bench ESPN projections (fantasy pts/game)
 # Default availability for a player with no NBA history (true rookie).
 ROOKIE_DURABILITY = availability.projected_games([], None) / FULL_SEASON
+# Availability counts at half strength: each player's games-played rate is pulled
+# halfway to the league norm. Full strength roughly doubled games left from the
+# most fragile regular to the sturdiest, letting an iron man with a poor per-game
+# line outrank better players; IR spots and streaming soften missed games anyway.
+DURABILITY_WEIGHT = 0.5
+LEAGUE_DURABILITY = availability.PRIOR_MEAN / FULL_SEASON
+
+
+def effective_durability(rate: float) -> float:
+    """Share of remaining team games a player is expected to play, damped."""
+    return DURABILITY_WEIGHT * rate + (1 - DURABILITY_WEIGHT) * LEAGUE_DURABILITY
 
 
 def nudge_weight(games_played: int, k: int = NUDGE_PRIOR_GAMES) -> float:
@@ -57,7 +71,7 @@ def project_player(
     w = nudge_weight(games_played)
     value_fpg = (1 - w) * darko_fpg + w * actual_fpg
 
-    durability = availability.projected_games(gp_history, age) / FULL_SEASON
+    durability = effective_durability(availability.projected_games(gp_history, age) / FULL_SEASON)
     games_left = round(durability * team_games_left, 1)
 
     return {
@@ -106,6 +120,7 @@ def value_board(
     formula: Mapping[str, float],
     tricode_by_id: Mapping[int, str],
     today: date | None = None,
+    roster_team: Mapping[int, str] | None = None,
 ) -> list[dict]:
     """Value every DARKO player off current-season role + production.
 
@@ -115,8 +130,11 @@ def value_board(
     tiny current-season sample regresses toward (DARKO's own minutes are
     talent-regressed and run low, so they make a poor prior);
     `tricode_by_id` maps a DARKO tm_id to an NBA tricode so players who have not
-    yet appeared in a box score still get their team's schedule.
+    yet appeared in a box score still get their team's schedule;
+    `roster_team` is {nba_id: tricode} from current NBA rosters — preferred over
+    box-score teams because it reflects trades immediately.
     """
+    roster_team = roster_team or {}
     avg_week, avg_left = league_average_counts(team_dates, today)
 
     rows = []
@@ -130,7 +148,8 @@ def value_board(
         prior_min = prior_minutes.get(nba_id) or d["darko_minutes"]
         season_min = cur["line"].get("MIN", 0.0) if (cur and gp > 0) else None
         role_minutes = prior_min if season_min is None else (1 - w_min) * prior_min + w_min * season_min
-        team = cur["team"] if (cur and cur.get("team")) else tricode_by_id.get(d.get("tm_id"))
+        team = (roster_team.get(nba_id)
+                or (cur["team"] if (cur and cur.get("team")) else tricode_by_id.get(d.get("tm_id"))))
 
         gw, gl = team_counts(team_dates, team, avg_week, avg_left, today)
 
@@ -156,37 +175,48 @@ def value_board(
 def espn_only_rows(
     status: dict,
     darko_rows: list[dict],
-    nba_team_by_norm: Mapping[str, str],
+    standard_by_norm: Mapping[str, dict],
+    current_stats: Mapping[int, dict],
     team_dates: Mapping[str, list],
+    formula: Mapping[str, float],
     today: date | None = None,
 ) -> list[dict]:
     """Rows for ESPN players DARKO never covered — true rookies, mainly.
 
-    DARKO has no projection for a first-year player, so we fall back to ESPN's
-    own per-game projection (already in league scoring units) times a rookie
-    durability estimate. Skips anyone a DARKO row already covers (so no one is
-    double-counted) and deep-bench noise below a minutes-worth projection.
+    DARKO has no projection for a first-year player, so ESPN's preseason per-game
+    projection stands in as the prior, blended with his actual production on the
+    same K=5 ramp as everyone else (so a hyped rookie who isn't producing comes
+    down), times a rookie durability estimate. Only players on a standard NBA
+    contract qualify (`standard_by_norm` is {normalized name: {nba_id, team}}).
+    Skips anyone a DARKO row already covers and deep-bench noise.
     """
     covered = names.Matcher({names.normalize(r["name"]): r for r in darko_rows})
+    standard = names.Matcher(dict(standard_by_norm))
     avg_week, avg_left = league_average_counts(team_dates, today)
     rows = []
     for name_, p in status["by_name"].items():
         if covered.get(name_) is not None:
             continue
-        avg = p.get("espn_avg") or 0.0
-        if avg < ESPN_ONLY_MIN_AVG:
+        contract = standard.get(name_)
+        prior = p.get("espn_proj_avg") or 0.0
+        if contract is None or prior < ESPN_ONLY_MIN_AVG:
             continue
-        team = nba_team_by_norm.get(names.normalize(name_)) or p.get("pro_team")
+        cur = current_stats.get(contract["nba_id"])
+        gp = cur["gp"] if cur else 0
+        actual = scoring.fantasy_points(cur["line"], formula) if gp else prior
+        w = nudge_weight(gp)
+        value_fpg = (1 - w) * prior + w * actual
+
+        team = contract["team"]
         gw, gl = team_counts(team_dates, team, avg_week, avg_left, today)
-        games_left = round(ROOKIE_DURABILITY * gl, 1)
+        games_left = round(effective_durability(ROOKIE_DURABILITY) * gl, 1)
         rows.append(
             {
-                "name": name_, "nba_id": None, "pro_team": team,
-                "dpm": 0.0, "minutes": 0.0, "usg": 0.0,
-                "darko_fpg": 0.0, "actual_fpg": round(avg, 2), "value_fpg": round(avg, 2),
-                "games_left": games_left, "value_ros": round(avg * games_left, 1),
-                "games_week": gw, "value_week": round(avg * gw, 1),
-                "rostered_by": p["rostered_by"], "is_mine": p["is_mine"], "injury": p["injury"],
+                "name": name_, "nba_id": contract["nba_id"], "pro_team": team,
+                "dpm": 0.0, "minutes": round(cur["line"].get("MIN", 0.0), 1) if gp else 0.0, "usg": 0.0,
+                "darko_fpg": 0.0, "actual_fpg": round(actual, 2), "value_fpg": round(value_fpg, 2),
+                "games_left": games_left, "value_ros": round(value_fpg * games_left, 1),
+                "games_week": gw, "value_week": round(value_fpg * gw, 1),
             }
         )
     return rows
